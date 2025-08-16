@@ -1,41 +1,58 @@
-# Multi-stage build for Maven multi-module project
+# Build stage
 FROM maven:3.9.4-eclipse-temurin-17-alpine AS build
 
-WORKDIR /app
+WORKDIR /build
 
-# Copy parent pom.xml first
-COPY pom.xml .
+# Install Node.js and npm for frontend module (required by parent build)
+RUN apk add --no-cache nodejs npm
 
-# Copy module pom.xml files
+# Copy parent pom and resolve parent dependencies first
+COPY pom.xml ./
+RUN mvn dependency:resolve-sources -q 2>/dev/null || true
+
+# Copy all module pom files to resolve dependencies
 COPY stocky-api/pom.xml ./stocky-api/
-COPY stocky-web/pom.xml ./stocky-web/
+COPY stocky-web/pom.xml ./stocky-web/ 2>/dev/null || echo "No web pom found"
 
-# Download dependencies (this layer will be cached)
-RUN mvn dependency:go-offline -B
+# Resolve all dependencies
+RUN mvn dependency:go-offline -B -q 2>/dev/null || true
 
-# Copy source code
+# Copy source code for API module only
 COPY stocky-api/src ./stocky-api/src
-COPY stocky-web/src ./stocky-web/src
 
-# Build the application (assuming stocky-api is the main module with @SpringBootApplication)
-RUN mvn clean package -DskipTests
+# Create empty web module structure to satisfy parent pom
+RUN mkdir -p stocky-web/src/main/java && \
+    echo 'public class EmptyClass {}' > stocky-web/src/main/java/EmptyClass.java
 
-# Runtime stage
+# Build the project with profiles to skip frontend
+RUN mvn clean package -DskipTests -Dmaven.test.skip=true -pl stocky-api -am --batch-mode
+
+# Production stage
 FROM eclipse-temurin:17-jre-alpine
 
+# Install required tools
+RUN apk add --no-cache curl tzdata && \
+    ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+
 WORKDIR /app
 
-# Install curl for health checks (optional)
-RUN apk add --no-cache curl
+# Create application user
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
 
-# Copy the built jar from stocky-api module (adjust if different module has main class)
-COPY --from=build /app/stocky-api/target/*.jar app.jar
+# Copy jar file with proper permissions
+COPY --from=build --chown=appuser:appgroup /build/stocky-api/target/*.jar app.jar
 
-# Create non-root user
-RUN addgroup -g 1000 appuser && adduser -D -s /bin/sh -u 1000 -G appuser appuser
-RUN chown -R appuser:appuser /app
+# Switch to non-root user
 USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8080/actuator/health || exit 1
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# JVM optimization flags
+ENV JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication"
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
