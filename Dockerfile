@@ -1,5 +1,5 @@
 # Multi-stage build for Maven multi-module project
-FROM maven:3.8.6-openjdk-17-slim AS build
+FROM maven:3.9.4-eclipse-temurin-17-alpine AS build
 
 WORKDIR /app
 
@@ -21,15 +21,18 @@ COPY stocky-web/src ./stocky-web/src
 RUN mvn clean package -DskipTests
 
 # Runtime stage
-FROM openjdk:17-jre-slim
+FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
+
+# Install curl for health checks (optional)
+RUN apk add --no-cache curl
 
 # Copy the built jar from stocky-api module (adjust if different module has main class)
 COPY --from=build /app/stocky-api/target/*.jar app.jar
 
 # Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN addgroup -g 1000 appuser && adduser -D -s /bin/sh -u 1000 -G appuser appuser
 RUN chown -R appuser:appuser /app
 USER appuser
 
