@@ -3,31 +3,20 @@ FROM maven:3.9.4-eclipse-temurin-17-alpine AS build
 
 WORKDIR /build
 
-# Install Node.js and npm for frontend module (required by parent build)
+# Install Node.js and npm (required by the web module even if we skip it)
 RUN apk add --no-cache nodejs npm
 
-# Copy parent pom and resolve parent dependencies first
+# Copy parent pom first
 COPY pom.xml ./
-RUN mvn dependency:resolve-sources -q 2>/dev/null || true
 
-# Copy all module pom files to resolve dependencies
-COPY stocky-api/pom.xml ./stocky-api/
-COPY stocky-web/pom.xml ./stocky-web/ 2>/dev/null || echo "No web pom found"
+# Copy both module directories completely
+COPY stocky-api ./stocky-api/
+COPY stocky-web ./stocky-web/
 
-# Resolve all dependencies
-RUN mvn dependency:go-offline -B -q 2>/dev/null || true
+# Build only the API module, but parent needs all modules present
+RUN mvn clean package -DskipTests -pl stocky-api -am --batch-mode
 
-# Copy source code for API module only
-COPY stocky-api/src ./stocky-api/src
-
-# Create empty web module structure to satisfy parent pom
-RUN mkdir -p stocky-web/src/main/java && \
-    echo 'public class EmptyClass {}' > stocky-web/src/main/java/EmptyClass.java
-
-# Build the project with profiles to skip frontend
-RUN mvn clean package -DskipTests -Dmaven.test.skip=true -pl stocky-api -am --batch-mode
-
-# Production stage
+# Production stage  
 FROM eclipse-temurin:17-jre-alpine
 
 # Install required tools
