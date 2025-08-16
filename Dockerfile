@@ -1,24 +1,27 @@
-# Stage 1: Build the application
+# Dockerfile (place in repo root)
+# Stage 1: build the multi-module Maven project
 FROM maven:3.9.6-eclipse-temurin-17 AS build
+WORKDIR /workspace
+
+# Copy entire repo so Maven can resolve parent modules
+COPY . /workspace
+
+# Build all modules (skip tests to speed up)
+RUN mvn -B -DskipTests clean package
+
+# Stage 2: runtime image (slim)
+FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 
-# Copy pom.xml and download dependencies
-COPY stocky-api/pom.xml stocky-api/
-RUN mvn -f stocky-api/pom.xml dependency:go-offline
+# Copy the built backend jar from the multi-module build
+COPY --from=build /workspace/stocky-api/target/stocky-api-0.0.1-SNAPSHOT.jar app.jar
 
-# Copy source code and build
-COPY stocky-api stocky-api
-RUN mvn -f stocky-api/pom.xml -DskipTests clean package
-
-# Stage 2: Run the application
-FROM eclipse-temurin:17-jdk
-WORKDIR /app
-
-# Copy built JAR from the build stage
-COPY --from=build /app/stocky-api/target/stocky-api-0.0.1-SNAPSHOT.jar app.jar
-
-# Expose the app port
 EXPOSE 8080
 
-# Run the app
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# Use env vars for DB creds; Render will provide $PORT
+ENTRYPOINT ["sh","-c","java -Dserver.port=${PORT:-8080} \
+  -Dspring.datasource.url=${SPRING_DATASOURCE_URL} \
+  -Dspring.datasource.username=${SPRING_DATASOURCE_USERNAME} \
+  -Dspring.datasource.password=${SPRING_DATASOURCE_PASSWORD} \
+  -Dspring.jpa.hibernate.ddl-auto=${SPRING_JPA_HIBERNATE_DDL_AUTO:-update} \
+  -jar /app/app.jar"]
